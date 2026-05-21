@@ -4,4 +4,6 @@ node_modules/
 !.claude/settings.json
 !package.json
 !package-lock.json
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/skills/
