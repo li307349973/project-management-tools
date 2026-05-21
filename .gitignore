@@ -1,0 +1,7 @@
+node_modules/
+.next/
+*.json
+!.claude/settings.json
+!package.json
+!package-lock.json
+.claude/

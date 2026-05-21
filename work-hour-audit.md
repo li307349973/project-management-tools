@@ -1,0 +1,74 @@
+---
+name: work-hour-audit
+description: >
+  工时审核系统。从轻舟平台采集待复核工时数据，通过JIRA核验实际工时，输出审批结论。
+  当用户要求"审核工时"、"工时审批"、"检查工时"、"工时核验"时使用此技能。
+  此技能会自动：采集数据 → JIRA核验 → 审核 → 输出可确认/需处理结论。
+---
+
+# 工时审核 Skill
+
+端到端的工时审核流程：从轻舟平台采集待复核工时，通过 JIRA 核验实际工时，输出审批结论。
+
+## 工作流程
+
+### Step 1: 采集工时数据
+
+```bash
+cd /Users/mac/Documents/Codex/2026-05-20/claude-code
+node scripts/collect_api.js
+```
+
+采集逻辑：
+- 筛选「(待复核)」的工时段
+- 只采集「研发负责人已确认」的条目
+- 通过 CDP Network 拦截 `UC_PROJ_WORK_HOUR_RECHECK_SEARCH` API 获取完整数据
+- 需要 Chrome 运行在 `--remote-debugging-port=9222`
+- 输出 `workhours_data.json`
+
+### Step 2: JIRA 核验
+
+```bash
+node scripts/verify_jira.js
+```
+
+核验逻辑：
+- 从工时数据中提取所有 ATSES/FRISK 工单号
+- 通过 JIRA REST API 查询实际工时（含子任务递归 + assignee 过滤）
+- 按角色统计：研发→编码+设计+需求分析，测试→测试+测试确认
+- 需要 JIRA 页面在 Chrome 中已登录
+- 输出 `jira_verify.json`
+
+### Step 3: 运行审核
+
+```bash
+node scripts/run_audit.js
+```
+
+审核逻辑：
+- **🔴 异议**：周报有文字但无 ATSES/FRISK 工单号
+- **🔴 两者皆空**：周报为空且任务明细为空
+- **🔴 工时严重不一致**：填报人天 > JIRA实际人天，偏差 > 50%
+- **🟡 有工单无明细**：周报含工单号但任务明细为空（通过JIRA核验补充）
+- **🟡 周报未填**：周报文字为空但有任务明细
+- **🟡 工时偏差**：填报人天 > JIRA实际人天，偏差 10%-50%
+- **🟡 工单重复**：同一工单30天内出现两次
+- **✅ 可确认审批**：JIRA实际人天 ≥ 填报人天，或偏差 ≤ 10%
+- **➖ 不统计**：填报 ≤ JIRA实际（少报）
+
+### Step 4: 输出报告
+
+`audit_result.json` 包含所有发现和可确认审批条目。
+
+## 前置条件
+
+- Chrome 运行：`/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome_cdp_profile &`
+- Chrome 需登录轻舟平台 (`proj.fingard.com:1888`) 和 JIRA (`jira.fingard.com:6001`)
+- CDP 交互需要 Chrome 在最前面（脚本已自动调用 osascript activate）
+
+## 关键技术细节
+
+- 数据源：通过 CDP Network 拦截 `UC_PROJ_WORK_HOUR_RECHECK_SEARCH` API，不依赖 tooltip
+- JIRA 字段：`customfield_14607`(实际工作量) + 类型字段(编码/测试/设计/需求分析实际工作量)
+- 子任务：递归查询母工单的子任务，按 assignee 中文名匹配归属
+- 工时换算：JIRA小时 ÷ 8 = 人天
