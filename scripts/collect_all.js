@@ -1,8 +1,11 @@
 // Final CDP work hours collection: multi-week, tooltip capture, audit-filtered
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
+const ROOT = path.resolve(__dirname, '..');
+const DATA_FILE = path.join(ROOT, 'workhours_data.json');
 
-async function getPages() { return new Promise((r,j)=>{http.get('http://localhost:9222/json',(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)}); }
+async function getPages() { return new Promise((r,j)=>{http.get('http://127.0.0.1:9222/json/list',(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)}); }
 function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
 
 // ── Tooltip parser ──
@@ -252,7 +255,7 @@ async function main() {
   });
 
   console.log('\n💾 Saving ' + unique.length + ' entries...');
-  const outFile = '/Users/mac/Documents/Codex/2026-05-20/claude-code/workhours_data.json';
+  const outFile = DATA_FILE;
   fs.writeFileSync(outFile, JSON.stringify(unique, null, 2));
   console.log('   ✅ ' + outFile);
 

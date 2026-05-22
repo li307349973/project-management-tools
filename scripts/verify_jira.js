@@ -1,6 +1,72 @@
 // Verify JIRA hours with sub-task traversal
-const http=require('http'),fs=require('fs');
-async function gp(){return new Promise((r,j)=>{http.get('http://localhost:9222/json',res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)})}
+const http=require('http'),fs=require('fs'),path=require('path'),childProcess=require('child_process');
+const ROOT=path.resolve(__dirname,'..');
+const DATA_FILE=path.join(ROOT,'workhours_data.json');
+const JIRA_FILE=path.join(ROOT,'jira_verify.json');
+const JIRA_BASE_URL=(process.env.JIRA_BASE_URL||'http://jira.fingard.com:6001').replace(/\/+$/,'');
+const JIRA_KEYCHAIN_SERVICE=process.env.JIRA_KEYCHAIN_SERVICE||'codex-work-hour-audit-jira-token';
+const JIRA_KEYCHAIN_ACCOUNT=process.env.JIRA_KEYCHAIN_ACCOUNT||process.env.JIRA_USERNAME||'liqing';
+async function gp(){return new Promise((r,j)=>{http.get('http://127.0.0.1:9222/json/list',res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)})}
+
+function keychainToken(){
+  try{
+    return childProcess.execFileSync('security',[
+      'find-generic-password',
+      '-a',JIRA_KEYCHAIN_ACCOUNT,
+      '-s',JIRA_KEYCHAIN_SERVICE,
+      '-w'
+    ],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();
+  }catch(e){
+    return '';
+  }
+}
+
+function authHeaders(){
+  const headers={Accept:'application/json'};
+  if(process.env.JIRA_AUTH_HEADER){
+    headers.Authorization=process.env.JIRA_AUTH_HEADER;
+    return headers;
+  }
+  const token=process.env.JIRA_BEARER_TOKEN||process.env.JIRA_TOKEN;
+  if(token){
+    headers.Authorization='Bearer '+token;
+    return headers;
+  }
+  const kcToken=keychainToken();
+  if(kcToken){
+    headers.Authorization='Bearer '+kcToken;
+    return headers;
+  }
+  const user=process.env.JIRA_USERNAME;
+  const pass=process.env.JIRA_API_TOKEN||process.env.JIRA_PASSWORD;
+  if(user&&pass){
+    headers.Authorization='Basic '+Buffer.from(user+':'+pass).toString('base64');
+    return headers;
+  }
+  return null;
+}
+
+async function directSearch(jql,fields,maxResults,headers){
+  const url=new URL('/rest/api/2/search',JIRA_BASE_URL+'/');
+  url.searchParams.set('jql',jql);
+  url.searchParams.set('fields',fields.join(','));
+  url.searchParams.set('maxResults',String(maxResults));
+  const res=await fetch(url,{headers});
+  const text=await res.text();
+  if(!res.ok)throw new Error('JIRA API '+res.status+': '+text.substring(0,300));
+  return JSON.parse(text);
+}
+
+async function chromeSearch(runtimeEval,jql,fields,maxResults){
+  const url=new URL('/rest/api/2/search',JIRA_BASE_URL+'/');
+  url.searchParams.set('jql',jql);
+  url.searchParams.set('fields',fields.join(','));
+  url.searchParams.set('maxResults',String(maxResults));
+  const expr='fetch('+JSON.stringify(url.toString())+').then(async r=>{const t=await r.text(); if(!r.ok) throw new Error("JIRA API "+r.status+": "+t.slice(0,300)); return t;})';
+  const r=await runtimeEval(expr);
+  if(r.exceptionDetails)throw new Error(r.exceptionDetails.text||'JIRA fetch failed in Chrome');
+  return JSON.parse(r.result?.value||'{}');
+}
 
 // Role-aware JIRA hours (recursive with sub-tasks, assignee-filtered)
 function getJiraHours(ji,role,jiraData,personName){
@@ -22,7 +88,7 @@ function getJiraHours(ji,role,jiraData,personName){
 }
 
 async function main(){
-  const data=JSON.parse(fs.readFileSync('/Users/mac/Documents/Codex/2026-05-20/claude-code/workhours_data.json','utf-8'));
+  const data=JSON.parse(fs.readFileSync(DATA_FILE,'utf-8'));
 
   // Collect ALL issue IDs
   const issues=new Set();
@@ -35,27 +101,36 @@ async function main(){
   const issueList=[...issues];
   console.log('Issues to verify:',issueList.length);
 
-  // Connect Chrome
-  const pages=await gp();
-  const jp=pages.find(p=>p.url.includes('jira.fingard.com'));
-  if(!jp){console.log('No JIRA page');return;}
-  const ws=new WebSocket(jp.webSocketDebuggerUrl);
-  const pmap=new Map();let mid=0;
-  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id&&pmap.has(m.id)){pmap.get(m.id)(m.result);pmap.delete(m.id)}};
-  const S=(m,p={})=>new Promise(r=>{const id=++mid;pmap.set(id,r);ws.send(JSON.stringify({id,method:m,params:p}))});
-  const J=(e)=>S('Runtime.evaluate',{expression:e,returnByValue:true,awaitPromise:true});
-  await new Promise(r=>ws.onopen=r);
-  await S('Page.enable');await S('Runtime.enable');
-
   const workFields=['customfield_14606','customfield_14607','customfield_10539','customfield_10528','customfield_10550','customfield_10557','customfield_14625','customfield_10513','customfield_10542','customfield_10533','customfield_10551','customfield_10562','customfield_10516','customfield_14602','customfield_14604'];
+  const fields=[...workFields,'summary','status','subtasks','assignee'];
   const jiraData={};
+  const headers=authHeaders();
+  let close=()=>{};
+  let search;
+  if(headers){
+    console.log('JIRA mode: direct REST API');
+    search=(jql,maxResults)=>directSearch(jql,fields,maxResults,headers);
+  }else{
+    console.log('JIRA mode: Chrome session REST API');
+    const pages=await gp();
+    const jp=pages.find(p=>p.url.includes('jira.fingard.com'));
+    if(!jp){console.log('No JIRA page and no JIRA token configured');return;}
+    const ws=new WebSocket(jp.webSocketDebuggerUrl);
+    const pmap=new Map();let mid=0;
+    ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id&&pmap.has(m.id)){pmap.get(m.id)(m.result);pmap.delete(m.id)}};
+    const S=(m,p={})=>new Promise(r=>{const id=++mid;pmap.set(id,r);ws.send(JSON.stringify({id,method:m,params:p}))});
+    const J=(e)=>S('Runtime.evaluate',{expression:e,returnByValue:true,awaitPromise:true});
+    await new Promise(r=>ws.onopen=r);
+    await S('Page.enable');await S('Runtime.enable');
+    close=()=>ws.close();
+    search=(jql,maxResults)=>chromeSearch(J,jql,fields,maxResults);
+  }
 
   // Fetch all top-level issues
   const jql='issue in ('+issueList.join(',')+')';
-  let r=await J('fetch("http://jira.fingard.com:6001/rest/api/2/search?jql='+encodeURIComponent(jql)+'&fields='+workFields.join(',')+',summary,status,subtasks,assignee&maxResults=100").then(r=>r.json()).then(d=>JSON.stringify(d))');
-  const searchResult=JSON.parse(r.result?.value||'{}');
+  const searchResult=await search(jql,100);
 
-  if(!searchResult.issues){console.log('Search failed');ws.close();return;}
+  if(!searchResult.issues){console.log('Search failed');close();return;}
 
   // Parse issues + collect sub-task keys
   const subKeys=new Set();
@@ -84,8 +159,7 @@ async function main(){
     const subList=[...subKeys];
     console.log('Sub-tasks:',subList.length);
     const sjql='key in ('+subList.join(',')+')';
-    let sr=await J('fetch("http://jira.fingard.com:6001/rest/api/2/search?jql='+encodeURIComponent(sjql)+'&fields='+workFields.join(',')+',summary,status,subtasks,assignee&maxResults=200").then(r=>r.json()).then(d=>JSON.stringify(d))');
-    const subResult=JSON.parse(sr.result?.value||'{}');
+    const subResult=await search(sjql,200);
     for(const issue of subResult.issues||[]){
       const f=issue.fields;
       const asgn=(f.assignee||{}).displayName||'';
@@ -146,8 +220,8 @@ async function main(){
     }
   });
 
-  fs.writeFileSync('/Users/mac/Documents/Codex/2026-05-20/claude-code/jira_verify.json',JSON.stringify({jiraData,mismatches},null,2));
-  console.log('Saved jira_verify.json');
-  ws.close();
+  fs.writeFileSync(JIRA_FILE,JSON.stringify({jiraData,mismatches},null,2));
+  console.log('Saved '+JIRA_FILE);
+  close();
 }
 main().catch(e=>console.error(e.message));

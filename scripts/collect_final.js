@@ -1,5 +1,7 @@
 // Final CDP work hours collection - simplified & robust
-const http=require('http'),fs=require('fs');
+const http=require('http'),fs=require('fs'),path=require('path');
+const ROOT=path.resolve(__dirname,'..');
+const DATA_FILE=path.join(ROOT,'workhours_data.json');
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
 function parseTooltip(t){
@@ -29,7 +31,7 @@ function parseTooltip(t){
   return{report,tasks,totalPlanH:+tasks.reduce((s,t)=>s+t.planH,0).toFixed(2),totalActH:+tasks.reduce((s,t)=>s+t.actH,0).toFixed(2),actDays:+(tasks.reduce((s,t)=>s+t.actH,0)/8).toFixed(2)};
 }
 
-async function gp(){return new Promise((r,j)=>{http.get('http://localhost:9222/json',res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)})}
+async function gp(){return new Promise((r,j)=>{http.get('http://127.0.0.1:9222/json/list',res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)})}
 
 async function main(){
   const pages=await gp();
@@ -196,8 +198,8 @@ function activate(){try{require('child_process').spawnSync('osascript',['-e','te
   // Deduplicate & save
   const seen=new Set();
   const unique=allData.filter(e=>{const k=e.name+'|'+e.project+'|'+e._dateRange;if(seen.has(k))return false;seen.add(k);return true;});
-  fs.writeFileSync('/Users/mac/Documents/Codex/2026-05-20/claude-code/workhours_data.json',JSON.stringify(unique,null,2));
-  console.log('\nSaved '+unique.length+' entries');
+  fs.writeFileSync(DATA_FILE,JSON.stringify(unique,null,2));
+  console.log('\nSaved '+unique.length+' entries to '+DATA_FILE);
 
   const empty=unique.filter(e=>e.tooltipData?._empty||!e.tooltipData?.report||e.tooltipData?.report==='无');
   const mismatch=unique.filter(e=>{if(!e.tooltipData||e.tooltipData._empty||e.tooltipData.actDays===0)return false;return Math.abs(e.tooltipData.actDays-e.total)/Math.max(e.total,0.01)>0.1;});

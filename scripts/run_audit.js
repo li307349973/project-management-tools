@@ -1,5 +1,9 @@
 // Audit script with JIRA verification
-const fs=require('fs');
+const fs=require('fs'),path=require('path');
+const ROOT=path.resolve(__dirname,'..');
+const DATA_FILE=path.join(ROOT,'workhours_data.json');
+const JIRA_FILE=path.join(ROOT,'jira_verify.json');
+const AUDIT_FILE=path.join(ROOT,'audit_result.json');
 function gid(...p){let h=0;const s=p.join('::');for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}return Math.abs(h).toString(36);}
 const CFG={spikeThreshold:50,identicalWeeks:3,maxDaily:24,maxWeekly:168,suspiciousDaily:16,suspiciousWeekly:84,taskVarPct:10};
 
@@ -96,9 +100,9 @@ function checkConsistency(entries){
 
 // ── Main ──
 function main(){
-  const data=JSON.parse(fs.readFileSync('/Users/mac/Documents/Codex/2026-05-20/claude-code/workhours_data.json','utf-8'));
+  const data=JSON.parse(fs.readFileSync(DATA_FILE,'utf-8'));
   let jiraMap={};
-  try{const jv=JSON.parse(fs.readFileSync('/Users/mac/Documents/Codex/2026-05-20/claude-code/jira_verify.json','utf-8'));for(const [k,v] of Object.entries(jv.jiraData||{}))jiraMap[k]=v;}catch(e){}
+  try{const jv=JSON.parse(fs.readFileSync(JIRA_FILE,'utf-8'));for(const [k,v] of Object.entries(jv.jiraData||{}))jiraMap[k]=v;}catch(e){}
 
   const entries=data.filter(e=>e.status==='研发负责人已确认');
 
@@ -170,7 +174,7 @@ function main(){
     console.log('');
   }
 
-  fs.writeFileSync('/Users/mac/Documents/Codex/2026-05-20/claude-code/audit_result.json',JSON.stringify({summary,findings:all,approved},null,2));
-  console.log('已保存 audit_result.json');
+  fs.writeFileSync(AUDIT_FILE,JSON.stringify({summary,findings:all,approved},null,2));
+  console.log('已保存 '+AUDIT_FILE);
 }
 main();

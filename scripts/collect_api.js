@@ -1,7 +1,9 @@
 // Collect work hours via CDP Network API interception - complete & reliable
-const http=require('http'),fs=require('fs');
+const http=require('http'),fs=require('fs'),path=require('path');
+const ROOT=path.resolve(__dirname,'..');
+const DATA_FILE=path.join(ROOT,'workhours_data.json');
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-async function gp(){return new Promise((r,j)=>{http.get('http://localhost:9222/json',res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)})}
+async function gp(){return new Promise((r,j)=>{http.get('http://127.0.0.1:9222/json/list',res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>r(JSON.parse(d)))}).on('error',j)})}
 
 async function main(){
   const pages=await gp();
@@ -172,7 +174,7 @@ async function main(){
   const seen=new Set();
   const unique=allData.filter(e=>{const k=e.name+'|'+e.project+'|'+e._dateRange;if(seen.has(k))return false;seen.add(k);return true;});
 
-  const outFile='/Users/mac/Documents/Codex/2026-05-20/claude-code/workhours_data.json';
+  const outFile=DATA_FILE;
   fs.writeFileSync(outFile,JSON.stringify(unique,null,2));
   console.log('\nSaved '+unique.length+' entries to '+outFile);
 
