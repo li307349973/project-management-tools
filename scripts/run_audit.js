@@ -12,7 +12,7 @@ function checkReports(entries,jiraMap){
   for(const e of entries){
     const td=e.tooltipData;if(!td)continue;
     // Both empty
-    if(td._bothEmpty){f.push({id:gid('both-empty',e.name,e._dateRange,e.subProduct),severity:'error',category:'weeklyReport',person:e.name,subProduct:e.subProduct,week:e._dateRange,message:`${e.name} 周报和任务明细均为空 (${e._dateRange}, ${e.subProduct})`,detail:`${e.projectName}/${e.subProduct}: 无周报内容且无关联工单`,suggestion:'请补充周报或关联工单'});continue;}
+    if(td._bothEmpty){f.push({id:gid('both-empty',e.name,e._dateRange,e.subProduct),severity:'error',category:'weeklyReport',person:e.name,subProduct:e.subProduct,week:e._dateRange,message:`${e.name} 周报和任务明细均为空`,detail:`${e.projectName}/${e.subProduct}: 无周报内容且无关联工单`,suggestion:'请补充周报或关联工单'});continue;}
 
     const jiraIds=(td.report||'').match(/(ATSES|FRISK)-\d+/g)||[];
 
@@ -121,7 +121,6 @@ function main(){
   }
   for(const [id,usages] of issueMap){
     if(usages.length<2)continue;
-    // Check if within a month (30 days)
     for(let i=0;i<usages.length;i++){
       for(let j=i+1;j<usages.length;j++){
         const d1=new Date(usages[i].week.substring(0,10));
@@ -141,24 +140,33 @@ function main(){
 
   const summary={total:all.length,errors:all.filter(f=>f.severity==='error').length,warnings:all.filter(f=>f.severity==='warning').length,infos:all.filter(f=>f.severity==='info').length};
 
+  // Group by week
+  const weeks=[...new Set([...all.map(f=>f.week),...approved.map(a=>a.week)])].sort();
+
   console.log('═══════════════════════════════════');
   console.log('  工时审核报告（含JIRA核验）');
   console.log('═══════════════════════════════════\n');
   console.log('采集条目:',entries.length,'| ','JIRA核验:',Object.keys(jiraMap).length+'个工单 ✅');
-  console.log('审核发现:',summary.total,'(🔴',summary.errors,'🟡',summary.warnings,'🔵',summary.infos,')\n');
+  console.log('审核发现:',summary.total,'(🔴',summary.errors,'🟡',summary.warnings,'🔵',summary.infos,')');
+  console.log('覆盖时段:',weeks.length,'周\n');
 
-  for(const sev of ['error','warning','info']){
-    const fs=all.filter(f=>f.severity===sev);
-    if(fs.length===0)continue;
-    console.log('── '+(sev==='error'?'🔴 错误':sev==='warning'?'🟡 警告':'🔵 提示')+' ('+fs.length+') ──');
-    for(const f of fs)console.log('  ['+f.category+'] '+f.person+' | '+f.week+' | '+f.message);
-    console.log('');
-  }
+  for(const wk of weeks){
+    console.log('═══ ' + wk + ' ═══');
 
-  // Approved entries
-  if(approved.length>0){
-    console.log('── ✅ 可确认审批 (JIRA实际 ≥ 填报) ('+approved.length+') ──');
-    for(const a of approved)console.log('  '+a.name+' | '+a.week+' | '+a.proj+' | 填报'+a.rep+'天 | JIRA实际'+a.jiraActH+'h='+a.actDays+'天');
+    const wf=all.filter(f=>f.week===wk);
+    const wa=approved.filter(a=>a.week===wk);
+
+    for(const sev of ['error','warning','info']){
+      const fs=wf.filter(f=>f.severity===sev);
+      if(fs.length===0)continue;
+      const label=sev==='error'?'🔴 错误':sev==='warning'?'🟡 警告':'🔵 提示';
+      for(const f of fs)console.log('  '+label+' ['+f.category+'] '+f.person+' | '+f.subProduct+' | '+f.message);
+    }
+
+    if(wa.length>0){
+      console.log('  ✅ 可确认审批 ('+wa.length+'条):');
+      for(const a of wa)console.log('    '+a.name+' | '+a.proj+' | 填报'+a.rep+'天 | JIRA实际'+a.jiraActH+'h='+a.actDays+'天');
+    }
     console.log('');
   }
 
